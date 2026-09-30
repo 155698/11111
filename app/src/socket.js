@@ -133,6 +133,7 @@ export class SocketClient {
   deleteMessage(messageId) { this.send('message:delete', { messageId }); }
   fetchMessages(channelId, limit = 50) { this.send('fetch:messages', { channelId, limit }); }
   openDm(username) { this.send('dm:open', { username }); }
+  fetchVoiceList(guildId) { this.send('voice:list', { guildId }); }
 
   // ---- voice (WebRTC) ----
   async startMic() {

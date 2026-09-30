@@ -280,6 +280,19 @@ export function startChatServer(httpServer, db) {
       }
 
       // ---------- VOICE ----------
+      case 'voice:list': {
+        // full snapshot of voice channels of a guild with their members
+        const guildId = Number(data.guildId);
+        if (!guildId || !isInGuild(guildId)) return;
+        const channels = db.listChannels(guildId).filter((c) => c.type === 'voice');
+        const result = channels.map((ch) => ({
+          channelId: ch.id,
+          users: voiceState(ch.id),
+        }));
+        send(ws, 'voice:list', { guildId, channels: result });
+        break;
+      }
+
       case 'voice:join': {
         const ch = db.getChannel(data.channelId);
         if (!ch || ch.type !== 'voice' || !isInGuild(ch.guild_id)) return;

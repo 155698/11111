@@ -60,43 +60,32 @@ export default function App() {
     return () => {};
   }, [socket]);
 
-  // ---- update check (from local web server) ----
-  const APP_VERSION = '1.0.3b';
+  // ---- update check (from GitHub Releases) ----
+  const APP_VERSION = '1.0.4';
+  const GH_REPO = '155698/11111';
+  const GITHUB_API = 'https://api.github.com/repos/' + GH_REPO + '/releases/latest';
   useEffect(() => {
     let disposed = false;
     async function check() {
       try {
-        const candidates = [];
-        // web server on this machine (if running) or LAN IP
-        if (typeof window !== 'undefined') {
-          if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
-            candidates.push(`${window.location.origin}/version.json`);
+        const r = await fetch(GITHUB_API, { cache: 'no-store' });
+        if (!r.ok) return;
+        const rel = await r.json();
+        if (!rel || !rel.tag_name) return;
+        const remoteVersion = String(rel.tag_name).replace(/^v/i, '');
+        if (cmpVersions(remoteVersion, APP_VERSION) > 0) {
+          // find the .exe asset
+          let downloadUrl = '';
+          if (Array.isArray(rel.assets)) {
+            const exe = rel.assets.find((a) => a.name && /\.exe$/i.test(a.name));
+            if (exe) downloadUrl = exe.browser_download_url;
           }
-          if (window.electronAPI?.getServerUrl) {
-            const wsUrl = window.electronAPI.getServerUrl();
-            const host = wsUrl.replace(/^ws:\/\//, '').replace(/\/ws$/, '').split(':')[0];
-            if (host) candidates.push(`http://${host}:3000/version.json`);
-            candidates.push('http://localhost:3000/version.json');
-          }
+          setUpdateInfo({ version: remoteVersion, downloadUrl });
         }
-        candidates.push('http://localhost:3000/version.json');
-        for (const url of candidates) {
-          try {
-            const r = await fetch(url, { cache: 'no-store' });
-            if (!r.ok) continue;
-            const data = await r.json();
-            if (data && data.version && disposed) return;
-            if (data && data.version && cmpVersions(data.version, APP_VERSION) > 0) {
-              setUpdateInfo(data);
-              return;
-            }
-            return; // server responded — no newer version
-          } catch (e) { /* try next candidate */ }
-        }
-      } catch (e) { /* ignore */ }
+      } catch (e) { console.error('[update] check failed:', e); /* ignore */ }
     }
     check();
-    const id = setInterval(check, 5 * 60 * 1000); // every 5 minutes
+    const id = setInterval(check, 15 * 60 * 1000); // every 15 minutes
     return () => { disposed = true; clearInterval(id); };
   }, []);
 
@@ -125,10 +114,11 @@ export default function App() {
   }, []);
 
   function cmpVersions(a, b) {
-    const pa = String(a).split('.').map(Number);
-    const pb = String(b).split('.').map(Number);
+    const pa = String(a).split('.');
+    const pb = String(b).split('.');
     for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-      const x = pa[i] || 0, y = pb[i] || 0;
+      const x = parseInt(pa[i], 10) || 0;
+      const y = parseInt(pb[i], 10) || 0;
       if (x > y) return 1;
       if (x < y) return -1;
     }
@@ -260,6 +250,16 @@ export default function App() {
       setVoiceUsers(d.users || []);
       setVoiceMembers((m) => ({ ...m, [d.channelId]: d.users || [] }));
     }));
+    subs.push(socket.on('voice:list', (d) => {
+      // replace all voice members for this guild with the fresh snapshot
+      setVoiceMembers((m) => {
+        const next = { ...m };
+        for (const ch of d.channels || []) {
+          next[ch.channelId] = ch.users || [];
+        }
+        return next;
+      });
+    }));
     subs.push(socket.on('voice:member:join', (d) => {
       if (d.userId !== user?.id) socket.connectNewPeer(d.userId);
       const usersToAdd = [ { id: d.userId, user: d.user } ];
@@ -306,6 +306,15 @@ export default function App() {
     socket.onShareChanged = (sh) => setSharing(sh);
     return () => { subs.forEach((off) => off && off()); };
   }, [socket, user]);
+
+  // poll voice channel membership every 5 seconds so users appear/update
+  useEffect(() => {
+    if (!activeGuild) return undefined;
+    const run = () => socket.fetchVoiceList(activeGuild.id);
+    run();
+    const id = setInterval(run, 5000);
+    return () => clearInterval(id);
+  }, [socket, activeGuild]);
 
   // ---- voice activity detection (green ring while talking) ----
   function startVad(uid, stream) {
@@ -489,10 +498,7 @@ export default function App() {
         <div className="update-banner">
           <span className="ub-inner">🚀 Доступна новая версия <b>{updateInfo.version}</b> (у вас {APP_VERSION})</span>
           <button className="btn-primary" onClick={() => {
-            const base = (typeof window !== 'undefined' && (window.location.protocol === 'http:' || window.location.protocol === 'https:'))
-              ? window.location.origin
-              : `http://${lanIps[0]?.address || 'localhost'}:3000`;
-            const url = updateInfo.downloadUrl || `${base}/${encodeURIComponent(updateInfo.installer || 'MultiVoice Setup 1.0.2.exe')}`;
+            const url = updateInfo.downloadUrl || `https://github.com/${GH_REPO}/releases/latest`;
             if (typeof window !== 'undefined' && window.open) window.open(url, '_blank');
             setUpdateInfo(null);
           }}>Скачать</button>
