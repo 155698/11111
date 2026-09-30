@@ -123,6 +123,30 @@ export function startChatServer(httpServer, db) {
         break;
       }
 
+      case 'guild:members': {
+        const guildId = Number(data.guildId);
+        if (!guildId || !isInGuild(guildId)) return;
+        send(ws, 'guild:members', { guildId, members: db.listGuildMembers(guildId) });
+        break;
+      }
+
+      case 'guild:kick-member': {
+        const guildId = Number(data.guildId);
+        const targetId = Number(data.userId);
+        if (!guildId || !isInGuild(guildId)) return;
+        const r = db.kickMember(userId, guildId, targetId);
+        if (!r.ok) return send(ws, 'error', { error: r.error });
+        // notify kicked user's connection if online
+        const kickedCtx = findCtxByUserId(targetId);
+        if (kickedCtx) {
+          kickedCtx.guildsSet.delete(guildId);
+          kickedCtx.guilds = kickedCtx.guilds.filter((g) => g.id !== guildId);
+          send(kickedCtx.ws, 'guild:left', { guildId });
+        }
+        send(ws, 'guild:members', { guildId, members: db.listGuildMembers(guildId) });
+        break;
+      }
+
       case 'guild:create': {
         const guild = db.createGuild(userId, data.name || 'Новый сервер');
         ctx.guilds.push(guild); ctx.guildsSet.add(guild.id);
@@ -279,6 +303,37 @@ export function startChatServer(httpServer, db) {
         break;
       }
 
+      // ---------- ADMIN ----------
+      case 'admin:list-users': {
+        if (!db.isAdmin(userId)) return send(ws, 'error', { error: 'Нет прав администратора' });
+        send(ws, 'admin:users', { users: db.listUsers() });
+        break;
+      }
+      case 'admin:ban': {
+        if (!db.isAdmin(userId)) return send(ws, 'error', { error: 'Нет прав администратора' });
+        const r = db.banUser(userId, Number(data.userId));
+        if (!r.ok) return send(ws, 'error', { error: r.error });
+        send(ws, 'admin:user-updated', { user: r.user });
+        // kick banned user's socket if online
+        const target = Number(data.userId);
+        const ctx = findCtxByUserId(target);
+        if (ctx) { try { ctx.ws.close(); } catch {} }
+        break;
+      }
+      case 'admin:unban': {
+        if (!db.isAdmin(userId)) return send(ws, 'error', { error: 'Нет прав администратора' });
+        const r = db.unbanUser(userId, Number(data.userId));
+        if (!r.ok) return send(ws, 'error', { error: r.error });
+        send(ws, 'admin:user-updated', { user: r.user });
+        break;
+      }
+      case 'admin:delete-guild': {
+        if (!db.isAdmin(userId)) return send(ws, 'error', { error: 'Нет прав администратора' });
+        const r = db.deleteGuild(userId, Number(data.guildId));
+        if (!r.ok) return send(ws, 'error', { error: r.error });
+        broadcastGuildDeleted(data.guildId);
+        break;
+      }
       // ---------- VOICE ----------
       case 'voice:list': {
         // full snapshot of voice channels of a guild with their members
@@ -342,6 +397,18 @@ export function startChatServer(httpServer, db) {
     } else {
       for (const c of guildMembers(ch ? ch.guild_id : null)) {
         send(c.ws, 'message:update', { message });
+      }
+    }
+  }
+
+  // notify all clients that a guild was deleted by an admin
+  function broadcastGuildDeleted(guildId) {
+    for (const [, c] of clients) {
+      if (!c) continue;
+      if (c.guildsSet && c.guildsSet.has(guildId)) {
+        c.guildsSet.delete(guildId);
+        c.guilds = c.guilds.filter((g) => g.id !== guildId);
+        send(c.ws, 'guild:left', { guildId });
       }
     }
   }

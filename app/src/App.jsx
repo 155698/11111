@@ -14,10 +14,15 @@ export default function App() {
   const [friends, setFriends] = useState([]);
   const [friendReqIncoming, setFriendReqIncoming] = useState([]);
   const [friendReqPending, setFriendReqPending] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [showAdmin, setShowAdmin] = useState(false);
   const [view, setView] = useState('dm'); // 'dm' | 'friends' | 'search' | 'guild'
   const [searchResults, setSearchResults] = useState([]);
   const [activeGuild, setActiveGuild] = useState(null);
   const [guildChannels, setGuildChannels] = useState([]);
+  const [guildMembers, setGuildMembers] = useState([]);
+  const [showMembers, setShowMembers] = useState(false);
+  const [memberMenu, setMemberMenu] = useState(null);
   const [activeChannel, setActiveChannel] = useState(null); // {id, name, type, guild_id?, isDm}
   const [channelMessages, setChannelMessages] = useState([]);
   const [connected, setConnected] = useState(false);
@@ -61,7 +66,7 @@ export default function App() {
   }, [socket]);
 
   // ---- update check (from GitHub Releases) ----
-  const APP_VERSION = '1.0.8';
+  const APP_VERSION = '1.0.9';
   const GH_REPO = '155698/11111';
   const GITHUB_API = 'https://api.github.com/repos/' + GH_REPO + '/releases/latest';
   useEffect(() => {
@@ -160,13 +165,17 @@ export default function App() {
     const off3e = socket.on('friend:req:declined', (d) => {
       if (d.userId) setFriendReqPending((arr) => arr.filter((u) => u.id !== d.userId));
     });
+    const offAdmin1 = socket.on('admin:users', (d) => setAdminUsers(d.users || []));
+    const offAdmin2 = socket.on('admin:user-updated', (d) => {
+      setAdminUsers((arr) => arr.map((u) => (u.id === d.user.id ? d.user : u)));
+    });
     const off4 = socket.on('dm:opened', (d) => {
       setActiveChannel({ isDm: true, id: d.dmChannel.id, name: (d.dmChannel.other_user?.display_name || d.dmChannel.other_user?.username || 'ЛС') });
       // normalize to { channelId, messages, isDm } shape used by the messages handler
       setChannelMessages({ channelId: d.dmChannel.id, messages: d.messages || [], isDm: true });
-      setView('dm');
+      // do NOT switch the left panel — the DM opens in the work area
     });
-    return () => { off1(); off2(); off3(); off3b(); off3c(); off3d(); off3e(); off4(); };
+    return () => { off1(); off2(); off3(); off3b(); off3c(); off3d(); off3e(); offAdmin1(); offAdmin2(); off4(); };
   }, [socket]);
 
   // ---- guild / channel events ----
@@ -195,6 +204,7 @@ export default function App() {
       setActiveChannel((c) => null);
       setActiveGuild((g) => (g?.id === d.guildId ? null : g));
     }));
+    subs.push(socket.on('guild:members', (d) => setGuildMembers(d.members || [])));
     return () => subs.forEach((off) => off && off());
   }, [socket]);
 
@@ -307,6 +317,10 @@ export default function App() {
         const filtered = arr.filter((x) => x.uid !== uid);
         return [...filtered, { uid, stream }];
       });
+    };
+    socket.onRemoteScreenEnded = (uid) => {
+      setRemoteScreens((arr) => arr.filter((x) => x.uid !== uid));
+      setExpandedRemoteUid(null);
     };
     socket.onShareChanged = (sh) => setSharing(sh);
     return () => { subs.forEach((off) => off && off()); };
@@ -516,52 +530,51 @@ export default function App() {
       <Sidebar guilds={guilds} activeGuild={activeGuild} onSelect={selectGuild}
         voiceInGuildId={voiceGuildId}
         onCreate={() => { setGuildName(''); setCreatingGuild(true); }}
-        onOpenDm={() => setView('dm')} onOpenFriends={() => { socket.listFriendRequests(); setView('friends'); }}
-        onOpenSearch={() => setView('search')}
+        onOpenProfile={() => setView('profile')}
         view={view} />
       {view === 'guild' && (
         <GuildPanel guild={activeGuild} channels={guildChannels} activeChannel={activeChannel}
           onSelect={selectChannel} socket={socket}
           voiceMembers={voiceMembers} speakingUsers={speakingUsers}
           currentVoiceId={voiceChannel} channelSince={channelSince}
-          onLeave={() => socket.leaveGuild(activeGuild.id)} />
+          onLeave={() => socket.leaveGuild(activeGuild.id)}
+          onMembers={(gid) => { socket.fetchGuildMembers(gid); setShowMembers(true); }} />
       )}
-      {view === 'search' && (
-        <SearchPanel socket={socket} results={searchResults}
-          onJoin={(id) => { socket.joinGuild(id); }}
-          onSearch={(q) => socket.searchGuilds(q)} />
+      {view === 'profile' && (
+        <ProfilePanel user={user} friends={friends}
+          onDm={(f) => openDm(f)}
+          onSearch={(q) => socket.searchGuilds(q)}
+          onAdmin={() => { socket.adminListUsers(); setShowAdmin(true); }} />
       )}
-      {view === 'friends' && (
-        <FriendsPanel socket={socket} friends={friends}
-          incoming={friendReqIncoming} pending={friendReqPending}
-          onRequest={(nick) => socket.requestFriend(nick)}
-          onAccept={(u) => socket.acceptFriend(u.id)}
-          onDecline={(u) => socket.declineFriend(u.id)}
-          onDm={(friend) => openDm(friend)} />
+      {view === 'profile' && showAdmin && (
+        <AdminPanel users={adminUsers} guilds={guilds}
+          onBan={(uid) => socket.adminBan(uid)}
+          onUnban={(uid) => socket.adminUnban(uid)}
+          onDeleteGuild={(gid) => { if (confirm('Удалить сервер?')) socket.adminDeleteGuild(gid); }}
+          onClose={() => setShowAdmin(false)} />
       )}
       {view === 'dm' && (
         <DmPanel socket={socket} dms={dms} activeChannel={activeChannel}
           onSelect={selectDmChannel} />
       )}
-      <ChatPanel
-        channel={activeChannel}
-        messages={channelMessages}
-        socket={socket}
-        currentUserId={user?.id}
-        voiceChannel={voiceChannel}
-        voiceMembers={voiceMembers}
-        speakingUsers={speakingUsers}
-        shareStream={socket.shareStream}
-        labelsVisible={barVisible}
-        expandedShare={expandedShare}
-        onToggleExpand={(v) => setExpandedShare(v)}
-        onVoiceState={setVoiceChannel} />
-      {remoteScreens.length > 0 && (
-        <div className="remote-screens">
-          {remoteScreens.map((s) => (
-            <ScreenView key={s.uid} stream={s.stream} />
-          ))}
-        </div>
+      {view === 'profile' && searchResults.length > 0 ? (
+        <SearchResultsPanel results={searchResults}
+          onJoin={(id) => { socket.joinGuild(id); setSearchResults([]); }} />
+      ) : (
+        <ChatPanel
+          channel={activeChannel}
+          messages={channelMessages}
+          socket={socket}
+          currentUserId={user?.id}
+          voiceChannel={voiceChannel}
+          voiceMembers={voiceMembers}
+          speakingUsers={speakingUsers}
+          shareStream={socket.shareStream}
+          remoteScreens={remoteScreens}
+          labelsVisible={barVisible}
+          expandedShare={expandedShare}
+          onToggleExpand={(v) => setExpandedShare(v)}
+          onVoiceState={setVoiceChannel} />
       )}
       <VoiceBar
         voiceChannel={voiceChannel}
@@ -574,6 +587,40 @@ export default function App() {
         onLeave={leaveVoiceLocal} />
       <UserBar user={user} onLogout={() => { socket.logout(); setUser(null); }}
         onOpenSettings={openSettings} />
+
+      {showMembers && (
+        <div className="members-side">
+          <div className="members-side-head">
+            <span>Участники ({guildMembers.length})</span>
+            <button className="members-close" title="Закрыть" onClick={() => setShowMembers(false)}>✕</button>
+          </div>
+          <div className="member-list">
+            {guildMembers.map((m) => (
+              <div key={m.id} className="member-item">
+                <div className="member-ico">{m.display_name?.[0] || m.username?.[0] || '?'}</div>
+                <div className="member-info">
+                  <div className="member-name">{m.display_name || m.username}{m.member_role === 'owner' || (activeGuild && m.id === activeGuild.host_id) ? ' 👑' : ''}</div>
+                  <div className="member-nick">@{m.username}</div>
+                </div>
+                {m.id !== user?.id && (
+                  <div style={{ position: 'relative' }}>
+                    <button className="member-dots" title="Действия" onClick={() => setMemberMenu(m.id === memberMenu ? null : m.id)}>⋯</button>
+                    {memberMenu === m.id && (
+                      <div className="gp-dropdown">
+                        <button className="gp-drop-item" onClick={() => { setMemberMenu(null); setShowMembers(false); openDm(m); }}>💬 Перейти в чат</button>
+                        {(activeGuild && (user.id === activeGuild.host_id || user.id === activeGuild.owner_id)) && (
+                          <button className="gp-drop-item leave" onClick={() => { setMemberMenu(null); if (confirm('Выгнать этого участника?')) socket.kickMember(activeGuild.id, m.id); }}>🚪 Выгнать с сервера</button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+            {guildMembers.length === 0 && <p className="sp-empty">Нет участников</p>}
+          </div>
+        </div>
+      )}
 
       {creatingGuild && (
         <div className="modal-overlay" onClick={() => setCreatingGuild(false)}>
@@ -601,14 +648,29 @@ export default function App() {
         <div className="modal-overlay" onClick={() => setSharePickerOpen(false)}>
           <div className="modal modal-sources" onClick={(e) => e.stopPropagation()}>
             <div className="setts-head">Что показать?</div>
-            <div className="src-grid">
-              {shareSources.map((s) => (
-                <button key={s.id} className="src-item" onClick={() => startShareSource(s)}>
-                  {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <div className="src-no-thumb">📺</div>}
-                  <div className="src-name">{s.name}</div>
-                  <div className="src-type">{s.type === 'screen' ? 'Экран' : 'Приложение'}</div>
-                </button>
-              ))}
+            <div className="src-groups">
+              <div className="src-group">
+                <div className="src-group-title">ЭКРАНЫ</div>
+                <div className="src-grid">
+                  {shareSources.filter((s) => s.type === 'screen').map((s) => (
+                    <button key={s.id} className="src-item" onClick={() => startShareSource(s)}>
+                      {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <div className="src-no-thumb">📺</div>}
+                      <div className="src-name">{s.name}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="src-group">
+                <div className="src-group-title">ПРИЛОЖЕНИЯ</div>
+                <div className="src-grid">
+                  {shareSources.filter((s) => s.type === 'window').map((s) => (
+                    <button key={s.id} className="src-item" onClick={() => startShareSource(s)}>
+                      {s.thumbnail ? <img src={s.thumbnail} alt={s.name} /> : <div className="src-no-thumb">📋</div>}
+                      <div className="src-name">{s.name}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -624,7 +686,7 @@ export default function App() {
                   <span className="sett-nav-ico">🖥</span> Сервер
                 </button>
                 <button className={`sett-nav-item ${settTab === 'mic' ? 'active' : ''}`} onClick={() => setSettTab('mic')}>
-                  <span className="sett-nav-ico">🎧</span> Звук
+                  <span className="sett-nav-ico">🎧</span> Голос и видео
                 </button>
               </div>
               <div className="sett-content">
@@ -657,19 +719,12 @@ export default function App() {
   );
 }
 
-function Sidebar({ guilds, activeGuild, onSelect, onCreate, voiceInGuildId, view, onOpenDm, onOpenFriends, onOpenSearch }) {
-  const cls = (v) => (view === v ? 'sd-item active' : 'sd-item');
+function Sidebar({ guilds, activeGuild, onSelect, onCreate, voiceInGuildId, view, onOpenProfile }) {
   return (
     <div className="sidebar">
       <div className="sd-top">
-        <button className={`sd-dm ${view === 'search' ? 'active' : ''}`} title="Поиск серверов" onClick={onOpenSearch}>
-          <span role="img" aria-label="search">🔍</span>
-        </button>
-        <button className={`sd-dm ${view === 'friends' ? 'active' : ''}`} style={{ marginTop: 6 }} title="Друзья" onClick={onOpenFriends}>
-          <span role="img" aria-label="friends">👥</span>
-        </button>
-        <button className={`sd-dm ${view === 'dm' ? 'active' : ''}`} style={{ marginTop: 6 }} title="Прямые сообщения" onClick={onOpenDm}>
-          <span role="img" aria-label="dm">💬</span>
+        <button className={`sd-dm ${view === 'profile' ? 'active' : ''}`} title="Профиль" onClick={onOpenProfile}>
+          <span role="img" aria-label="profile">👤</span>
         </button>
       </div>
       <div className="sd-list">
@@ -695,11 +750,12 @@ function Sidebar({ guilds, activeGuild, onSelect, onCreate, voiceInGuildId, view
   );
 }
 
-function GuildPanel({ guild, channels, activeChannel, onSelect, socket, onLeave, voiceMembers, speakingUsers, currentVoiceId, channelSince }) {
+function GuildPanel({ guild, channels, activeChannel, onSelect, socket, onLeave, voiceMembers, speakingUsers, currentVoiceId, channelSince, onMembers }) {
   const text = channels.filter((c) => c.type === 'text');
   const voice = channels.filter((c) => c.type === 'voice');
   const [creating, setCreating] = useState(null); // 'text' | 'voice' | null
   const [name, setName] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
 
   function submit(type) {
     const n = name.trim();
@@ -711,8 +767,16 @@ function GuildPanel({ guild, channels, activeChannel, onSelect, socket, onLeave,
   return (
     <div className="guild-panel">
       <div className="gp-head">
-        {guild?.name || '—'}
-        <div className="gp-menu">⋯</div>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{guild?.name || '—'}</span>
+        <div style={{ position: 'relative' }}>
+          <button className="gp-menu" title="Меню сервера" onClick={() => setMenuOpen(!menuOpen)}>⋯</button>
+          {menuOpen && (
+            <div className="gp-dropdown">
+              <button className="gp-drop-item" onClick={() => { setMenuOpen(false); onMembers(guild.id); }}>👥 Участники</button>
+              <button className="gp-drop-item leave" onClick={() => { setMenuOpen(false); onLeave(); }}>🚪 Покинуть сервер</button>
+            </div>
+          )}
+        </div>
       </div>
       <div className="gp-body">
         <div className="gp-cat">
@@ -740,9 +804,7 @@ function GuildPanel({ guild, channels, activeChannel, onSelect, socket, onLeave,
           </div>
         ))}
       </div>
-      {guild && (
-        <button className="gp-leave" onClick={onLeave}>↩ Покинуть сервер</button>
-      )}
+      {guild && null}
 
       {creating && (
         <div className="modal-overlay" onClick={() => setCreating(null)}>
@@ -908,6 +970,113 @@ function FriendsPanel({ socket, friends, incoming, pending, onRequest, onAccept,
   );
 }
 
+function SearchResultsPanel({ results, onJoin }) {
+  return (
+    <div className="search-results">
+      <div className="sr-head">Результаты поиска</div>
+      <div className="sr-list">
+        {results.map((g) => (
+          <div key={g.id} className="sr-item">
+            <div className="sr-ico">{g.name.slice(0, 2).toUpperCase()}</div>
+            <div className="sr-info">
+              <div className="sr-name">{g.name}</div>
+              <div className="sr-meta">{g.member_count} участник(ов)</div>
+            </div>
+            <button className="btn-primary" disabled={g.is_member} onClick={() => onJoin(g.id)}>
+              {g.is_member ? '✓ Вы внутри' : 'Вступить'}
+            </button>
+          </div>
+        ))}
+        {results.length === 0 && <p className="sp-empty">Ничего не найдено</p>}
+      </div>
+    </div>
+  );
+}
+
+function AdminPanel({ users, guilds, onBan, onUnban, onDeleteGuild, onClose }) {
+  return (
+    <div className="search-panel">
+      <div className="gp-head">
+        <span style={{ flex: 1 }}>Админ-панель</span>
+        <button className="btn-secondary" onClick={onClose}>✕</button>
+      </div>
+      <div className="sp-body">
+        <div className="sp-cat">ПОЛЬЗОВАТЕЛИ ({users.length})</div>
+        <div className="sp-results">
+          {users.map((u) => (
+            <div key={u.id} className="sp-result">
+              <div className="sp-result-ico">{u.display_name?.[0] || u.username?.[0] || '?'}</div>
+              <div className="sp-result-info">
+                <span className="sp-result-name">{u.display_name || u.username} {u.role === 'admin' && '🛡'}</span>
+                <span className="sp-result-meta">@{u.username}{u.banned ? ' • забанен' : ''}</span>
+              </div>
+              {!u.banned
+                ? <button className="btn-secondary" style={{ color: 'var(--red)' }} onClick={() => onBan(u.id)}>Забанить</button>
+                : <button className="btn-secondary" onClick={() => onUnban(u.id)}>Разбанить</button>}
+            </div>
+          ))}
+        </div>
+        <div className="sp-cat">СЕРВЕРЫ ({guilds.length})</div>
+        <div className="sp-results">
+          {guilds.map((g) => (
+            <div key={g.id} className="sp-result">
+              <div className="sp-result-ico">{g.name.slice(0, 2).toUpperCase()}</div>
+              <div className="sp-result-info">
+                <span className="sp-result-name">{g.name}</span>
+                <span className="sp-result-meta">id: {g.id}</span>
+              </div>
+              <button className="btn-secondary" style={{ color: 'var(--red)' }} onClick={() => onDeleteGuild(g.id)}>Удалить</button>
+            </div>
+          ))}
+          {guilds.length === 0 && <p className="sp-empty">Серверов нет</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfilePanel({ user, friends, onDm, onSearch, onAdmin }) {
+  const [q, setQ] = useState('');
+  return (
+    <div className="search-panel">
+      <div className="gp-head">Профиль</div>
+      <div className="sp-body">
+        <div className="profile-card">
+          <div className="profile-avatar">{user.display_name?.[0] || user.username?.[0] || '?'}</div>
+          <div className="profile-name">{user.display_name || user.username}</div>
+          <div className="profile-nick">@{user.username}</div>
+          {user.role === 'admin' && (
+            <button className="btn-primary" style={{ marginTop: 8 }} onClick={onAdmin}>🛡 Админ-панель</button>
+          )}
+        </div>
+
+        <div className="sp-cat">ПОИСК СЕРВЕРА</div>
+        <div className="sp-addrow">
+          <input className="sp-input" placeholder="Название сервера…" value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') onSearch(q); }} />
+          <button className="sp-search-btn" onClick={() => onSearch(q)}>Найти</button>
+        </div>
+
+        <div className="sp-cat">ДРУЗЬЯ ({friends.length})</div>
+        <div className="sp-results">
+          {friends.map((f) => (
+            <div key={f.id} className="sp-result">
+              <div className="sp-result-ico">{f.display_name?.[0] || f.username?.[0] || '?'}</div>
+              <div className="sp-result-info">
+                <span className="sp-result-name">{f.display_name || f.username}</span>
+                <span className="sp-result-meta">@{f.username}</span>
+              </div>
+              <button className="btn-primary" onClick={() => onDm(f)}>💬</button>
+            </div>
+          ))}
+          {friends.length === 0 && <p className="sp-empty">Друзей пока нет</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DmPanel({ socket, dms, activeChannel, onSelect }) {
   return (
     <div className="search-panel">
@@ -933,13 +1102,14 @@ function DmPanel({ socket, dms, activeChannel, onSelect }) {
   );
 }
 
-function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voiceMembers, speakingUsers, shareStream, labelsVisible, expandedShare, onToggleExpand }) {
+function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voiceMembers, speakingUsers, shareStream, remoteScreens, labelsVisible, expandedShare, onToggleExpand }) {
   useEffect(() => {
     const el = document.getElementById('msg-scroll');
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.messages?.length, channel?.id]);
 
   const [draft, setDraft] = useState('');
+  const [expandedRemoteUid, setExpandedRemoteUid] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editingText, setEditingText] = useState('');
   const editInputRef = useRef(null);
@@ -986,14 +1156,31 @@ function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voi
               </button>
             </div>
           )}
-          {(voiceMembers[voiceId] || []).map((u) => (
-            <div key={u.id} className={`voice-tile ${speakingUsers.has(u.id) ? 'speaking' : ''}`}>
-              <div className="vt-avatar">
-                {u.user?.display_name?.[0] || u.user?.username?.[0] || '?'}
+          {(voiceMembers[voiceId] || []).map((u) => {
+            const remote = (remoteScreens || []).find((s) => s.uid === u.id);
+            const expanded = expandedRemoteUid === u.id;
+            return (
+              <div key={u.id} className={`voice-tile ${speakingUsers.has(u.id) ? 'speaking' : ''}`}>
+                {remote ? (
+                  <>
+                    <ScreenView stream={remote.stream} />
+                    <div className="vt-name">🖥 {u.user?.display_name || u.user?.username || `#${u.id}`}</div>
+                    <button className="vt-expand" title={expanded ? 'Свернуть' : 'Развернуть'}
+                      onClick={() => setExpandedRemoteUid(expanded ? null : u.id)}>
+                      {expanded ? '🗕' : '⛶'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="vt-avatar">
+                      {u.user?.display_name?.[0] || u.user?.username?.[0] || '?'}
+                    </div>
+                    <div className="vt-name">{u.user?.display_name || u.user?.username || `#${u.id}`}</div>
+                  </>
+                )}
               </div>
-              <div className="vt-name">{u.user?.display_name || u.user?.username || `#${u.id}`}</div>
-            </div>
-          ))}
+            );
+          })}
           {(voiceMembers[voiceId] || []).length === 0 && !shareStream && (
             <div className="voice-tiles-empty" />
           )}
@@ -1002,6 +1189,15 @@ function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voi
       {!channel && !voiceId && null}
       {channel && (
         <>
+          {channel.isDm && channel.dmUser && (
+            <div className="dm-head">
+              <div className="dm-head-avatar">{channel.dmUser.display_name?.[0] || channel.dmUser.username?.[0] || '?'}</div>
+              <div className="dm-head-info">
+                <div className="dm-head-name">{channel.dmUser.display_name || channel.dmUser.username}</div>
+                <div className="dm-head-nick">@{channel.dmUser.username}</div>
+              </div>
+            </div>
+          )}
           {canChat ? (
             <>
               <div id="msg-scroll" className="msg-scroll">
@@ -1065,6 +1261,20 @@ function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voi
           </button>
         </div>
       )}
+
+      {expandedRemoteUid && (() => {
+        const rs = (remoteScreens || []).find((s) => s.uid === expandedRemoteUid);
+        if (!rs) return null;
+        return (
+          <div className="share-expanded" onClick={() => setExpandedRemoteUid(null)}>
+            <ScreenView stream={rs.stream} />
+            <button className="vt-expand share-expanded-btn" title="Свернуть"
+              onClick={() => setExpandedRemoteUid(null)}>
+              🗕
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1106,6 +1316,10 @@ function SoundSettings({ socket }) {
   const [testingOut, setTestingOut] = useState(false);
   const [level, setLevel] = useState(0);
   const [outTestMsg, setOutTestMsg] = useState('');
+  const [procGain, setProcGain] = useState(() => Number(localStorage.getItem('mvt_proc_gain') ?? 1));
+  const [procNoise, setProcNoise] = useState(() => Number(localStorage.getItem('mvt_proc_noise') ?? 0.5));
+  const [procSens, setProcSens] = useState(() => Number(localStorage.getItem('mvt_proc_sens') ?? 0.5));
+  const [shareQuality, setShareQuality] = useState(() => localStorage.getItem('mvt_share_quality') || '1080p60');
   const levelRef = useRef(0);
   const streamRef = useRef(null);
   const rafRef = useRef(null);
@@ -1217,6 +1431,14 @@ function SoundSettings({ socket }) {
     localStorage.setItem('mvt_mic_id', selectedIn);
     localStorage.setItem('mvt_out_id', selectedOut);
     if (socket && socket.requestMicDevice) socket.requestMicDevice(selectedIn);
+    // save + apply mic processing
+    localStorage.setItem('mvt_proc_gain', String(procGain));
+    localStorage.setItem('mvt_proc_noise', String(procNoise));
+    localStorage.setItem('mvt_proc_sens', String(procSens));
+    localStorage.setItem('mvt_share_quality', shareQuality);
+    if (socket && socket.applyMicProcessing) {
+      socket.applyMicProcessing({ gain: procGain, noiseGate: procNoise, sensitivity: procSens });
+    }
     setLevel(0);
   }
 
@@ -1247,6 +1469,28 @@ function SoundSettings({ socket }) {
         ) : (
           <button className="btn-secondary" onClick={stopTest}>Остановить</button>
         )}
+        <button className="btn-secondary" onClick={apply}>Применить</button>
+      </div>
+
+      <div style={{ margin: '18px 0 0', borderTop: '1px solid var(--bg3)', paddingTop: '16px' }}>
+        <div className="sett-title">Обработка микрофона</div>
+
+        <div className="proc-row">
+          <label>Усиление: <b>{(procGain * 100).toFixed(0)}%</b></label>
+          <input type="range" min="0.3" max="3" step="0.05" value={procGain}
+            onChange={(e) => setProcGain(Number(e.target.value))} />
+        </div>
+        <div className="proc-row">
+          <label>Подавление шума: <b>{(procNoise * 100).toFixed(0)}%</b></label>
+          <input type="range" min="0" max="1" step="0.05" value={procNoise}
+            onChange={(e) => setProcNoise(Number(e.target.value))} />
+        </div>
+        <div className="proc-row">
+          <label>Чувствительность: <b>{(procSens * 100).toFixed(0)}%</b></label>
+          <input type="range" min="0.1" max="1" step="0.05" value={procSens}
+            onChange={(e) => setProcSens(Number(e.target.value))} />
+        </div>
+        <p className="sp-empty-mini">Высокое подавление шума сильнее «вырезает» шум, но может глушить тихий голос. Чувствительность отвечает за скорость реакции.</p>
       </div>
 
       <div style={{ margin: '18px 0 0', borderTop: '1px solid var(--bg3)', paddingTop: '16px' }}>
@@ -1271,6 +1515,19 @@ function SoundSettings({ socket }) {
           )}
           <button className="btn-secondary" onClick={apply}>Применить</button>
         </div>
+      </div>
+
+      <div style={{ margin: '18px 0 0', borderTop: '1px solid var(--bg3)', paddingTop: '16px' }}>
+        <div className="sett-title">Трансляция экрана</div>
+        <p className="sett-hint">Качество демонстрации экрана:</p>
+        <select className="sp-input" value={shareQuality} onChange={(e) => setShareQuality(e.target.value)}>
+          <option value="1080p60">1080p · 60 кадров/с</option>
+          <option value="1080p30">1080p · 30 кадров/с</option>
+          <option value="720p60">720p · 60 кадров/с</option>
+          <option value="720p30">720p · 30 кадров/с</option>
+          <option value="480p30">480p · 30 кадров/с</option>
+          <option value="360p30">360p · 30 кадров/с</option>
+        </select>
       </div>
     </div>
   );

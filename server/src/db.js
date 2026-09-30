@@ -99,6 +99,8 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
   avatar      TEXT NOT NULL DEFAULT '',
+  role        TEXT NOT NULL DEFAULT 'user',
+  banned      INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS guilds (
@@ -163,6 +165,11 @@ CREATE TABLE IF NOT EXISTS friend_requests (
   if (!msgCols.includes('edited')) db.exec('ALTER TABLE messages ADD COLUMN edited INTEGER NOT NULL DEFAULT 0');
   if (!msgCols.includes('deleted')) db.exec('ALTER TABLE messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0');
 
+  // migration: add role/banned to users
+  const userCols = all('PRAGMA table_info(users)').map((c) => c.name);
+  if (!userCols.includes('role')) db.exec('ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT "user"');
+  if (!userCols.includes('banned')) db.exec('ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0');
+
   const now = () => Date.now();
 
   const userCache = new Map();
@@ -180,10 +187,13 @@ CREATE TABLE IF NOT EXISTS friend_requests (
       const existing = get('SELECT id FROM users WHERE username = ?', [uname]);
       if (existing) return { ok: false, error: 'Имя пользователя занято' };
       if (password.length < 4) return { ok: false, error: 'Пароль слишком короткий' };
-      const info = run('INSERT INTO users (username, display_name, password_hash, created_at) VALUES (?, ?, ?, ?)',
-        [uname, displayName || uname, hashPassword(password), now()]);
+      const count = get('SELECT COUNT(*) as c FROM users');
+      // first registered account becomes admin
+      const role = !count || count.c === 0 ? 'admin' : 'user';
+      const info = run('INSERT INTO users (username, display_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)',
+        [uname, displayName || uname, hashPassword(password), role, now()]);
       const token = crypto.randomBytes(24).toString('hex');
-      const user = get('SELECT id, username, display_name, avatar, created_at FROM users WHERE id = ?', [info.lastInsertRowid]);
+      const user = get('SELECT id, username, display_name, avatar, role, created_at FROM users WHERE id = ?', [info.lastInsertRowid]);
       userCache.set(token, user);
       this._persist();
       return { ok: true, token, user };
@@ -194,14 +204,17 @@ CREATE TABLE IF NOT EXISTS friend_requests (
       if (!row || !verifyPassword(password, row.password_hash)) {
         return { ok: false, error: 'Неверное имя или пароль' };
       }
+      if (row.banned) {
+        return { ok: false, error: 'Аккаунт заблокирован' };
+      }
       const token = crypto.randomBytes(24).toString('hex');
-      const user = { id: row.id, username: row.username, display_name: row.display_name, avatar: row.avatar, created_at: row.created_at };
+      const user = { id: row.id, username: row.username, display_name: row.display_name, avatar: row.avatar, role: row.role, banned: row.banned, created_at: row.created_at };
       userCache.set(token, user);
       return { ok: true, token, user };
     },
     logout(token) { userCache.delete(token); },
     getUserById(id) {
-      return get('SELECT id, username, display_name, avatar, created_at FROM users WHERE id = ?', [id]);
+      return get('SELECT id, username, display_name, avatar, role, banned, created_at FROM users WHERE id = ?', [id]);
     },
     createGuild(ownerId, name) {
       const info = run('INSERT INTO guilds (name, owner_id, host_id, created_at) VALUES (?, ?, ?, ?)', [name, ownerId, ownerId, now()]);
@@ -217,6 +230,10 @@ CREATE TABLE IF NOT EXISTS friend_requests (
       return all(`SELECT g.* FROM guilds g JOIN guild_members gm ON gm.guild_id = g.id WHERE gm.user_id = ? ORDER BY g.created_at`, [userId]);
     },
     isMember(guildId, userId) { return !!get('SELECT 1 FROM guild_members WHERE guild_id = ? AND user_id = ?', [guildId, userId]); },
+    listGuildMembers(guildId) {
+      const rows = all('SELECT user_id, role, joined_at FROM guild_members WHERE guild_id = ?', [guildId]);
+      return rows.map((r) => ({ ...api.getUserById(r.user_id), member_role: r.role, joined_at: r.joined_at })).filter(Boolean);
+    },
     joinGuild(guildId, userId) {
       if (api.isMember(guildId, userId)) return api.getGuild(guildId);
       run('INSERT INTO guild_members (guild_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)', [guildId, userId, 'member', now()]);
@@ -226,6 +243,17 @@ CREATE TABLE IF NOT EXISTS friend_requests (
     leaveGuild(guildId, userId) {
       run('DELETE FROM guild_members WHERE guild_id = ? AND user_id = ?', [guildId, userId]);
       this._persist();
+    },
+    kickMember(adminId, guildId, targetId) {
+      const guild = api.getGuild(guildId);
+      if (!guild) return { ok: false, error: 'Сервер не найден' };
+      if (guild.host_id !== adminId && guild.owner_id !== adminId) {
+        return { ok: false, error: 'Нет прав администратора сервера' };
+      }
+      if (targetId === adminId) return { ok: false, error: 'Нельзя выгнать себя' };
+      run('DELETE FROM guild_members WHERE guild_id = ? AND user_id = ?', [guildId, targetId]);
+      this._persist();
+      return { ok: true };
     },
     listChannels(guildId) { return all('SELECT * FROM channels WHERE guild_id = ? ORDER BY position, id', [guildId]); },
     getChannel(channelId) { return get('SELECT * FROM channels WHERE id = ?', [channelId]) || null; },
@@ -365,6 +393,32 @@ CREATE TABLE IF NOT EXISTS friend_requests (
     declineRequest(userId, fromId) {
       run('DELETE FROM friend_requests WHERE from_id = ? AND to_id = ?', [fromId, userId]);
       this._persist();
+    },
+    isAdmin(userId) {
+      const u = get('SELECT role FROM users WHERE id = ?', [userId]);
+      return !!(u && u.role === 'admin');
+    },
+    listUsers() {
+      return all('SELECT id, username, display_name, avatar, role, banned, created_at FROM users ORDER BY id');
+    },
+    banUser(adminId, targetId) {
+      if (!api.isAdmin(adminId)) return { ok: false, error: 'Нет прав администратора' };
+      if (adminId === targetId) return { ok: false, error: 'Нельзя забанить себя' };
+      run('UPDATE users SET banned = 1 WHERE id = ?', [targetId]);
+      this._persist();
+      return { ok: true, user: api.getUserById(targetId) };
+    },
+    unbanUser(adminId, targetId) {
+      if (!api.isAdmin(adminId)) return { ok: false, error: 'Нет прав администратора' };
+      run('UPDATE users SET banned = 0 WHERE id = ?', [targetId]);
+      this._persist();
+      return { ok: true, user: api.getUserById(targetId) };
+    },
+    deleteGuild(adminId, guildId) {
+      if (!api.isAdmin(adminId)) return { ok: false, error: 'Нет прав администратора' };
+      run('DELETE FROM guilds WHERE id = ?', [guildId]);
+      this._persist();
+      return { ok: true };
     },
   };
 
