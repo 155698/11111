@@ -255,7 +255,7 @@ export class SocketClient {
 
   // Called when a peer joins -> we initiate the call.
   async connectNewPeer(userId) {
-    const pc = new RTCPeerConnection({ iceServers: this._iceConfig() });
+    const pc = new RTCPeerConnection(this._iceConfig());
     this.peers.set(userId, pc);
     if (this.localStream) this.localStream.getAudioTracks().forEach((t) => pc.addTrack(t, this.localStream));
     if (this.shareStream) this.shareStream.getVideoTracks().forEach((t) => pc.addTrack(t, this.shareStream));
@@ -331,7 +331,7 @@ export class SocketClient {
   }
 
   _makePeer(userId) {
-    const pc = new RTCPeerConnection({ iceServers: this._iceConfig() });
+    const pc = new RTCPeerConnection(this._iceConfig());
     this.peers.set(userId, pc);
     this._wirePeer(pc, userId);
     return pc;
