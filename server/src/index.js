@@ -62,9 +62,9 @@ export async function startServer(options = {}) {
     if (req.url && req.url.startsWith('/version.json')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
-        version: process.env.APP_VERSION || options.version || '1.0.4',
+        version: process.env.APP_VERSION || options.version || '1.0.5',
         downloadUrl: process.env.DOWNLOAD_URL || options.downloadUrl || '',
-        installer: options.installerName || 'MultiVoice Setup 1.0.4.exe',
+        installer: options.installerName || 'MultiVoice Setup 1.0.5.exe',
       }));
       return;
     }

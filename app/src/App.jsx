@@ -61,7 +61,7 @@ export default function App() {
   }, [socket]);
 
   // ---- update check (from GitHub Releases) ----
-  const APP_VERSION = '1.0.4';
+  const APP_VERSION = '1.0.5';
   const GH_REPO = '155698/11111';
   const GITHUB_API = 'https://api.github.com/repos/' + GH_REPO + '/releases/latest';
   useEffect(() => {
@@ -499,7 +499,11 @@ export default function App() {
           <span className="ub-inner">🚀 Доступна новая версия <b>{updateInfo.version}</b> (у вас {APP_VERSION})</span>
           <button className="btn-primary" onClick={() => {
             const url = updateInfo.downloadUrl || `https://github.com/${GH_REPO}/releases/latest`;
-            if (typeof window !== 'undefined' && window.open) window.open(url, '_blank');
+            if (typeof window !== 'undefined' && window.electronAPI?.openExternal) {
+              window.electronAPI.openExternal(url);
+            } else if (typeof window !== 'undefined' && window.open) {
+              window.open(url, '_blank');
+            }
             setUpdateInfo(null);
           }}>Скачать</button>
         </div>

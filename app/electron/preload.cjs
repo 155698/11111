@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getServerUrl: () => ipcRenderer.sendSync('server:url'),
   getLanIps: () => ipcRenderer.invoke('lan:ips'),
   getShareSources: () => ipcRenderer.invoke('sources:list'),
+  openExternal: (url) => ipcRenderer.invoke('open:external', url),
 });

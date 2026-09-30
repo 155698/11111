@@ -32,6 +32,14 @@ ipcMain.handle('sources:list', async () => {
   }
 });
 
+ipcMain.handle('open:external', async (event, url) => {
+  try {
+    const { shell } = require('electron');
+    await shell.openExternal(String(url));
+    return true;
+  } catch (e) { return false; }
+});
+
 ipcMain.on('server:url', (event) => {
   // In server mode the embedded server exists; otherwise return '' and let the
   // client use its saved network address (⚙ settings) or localhost default.

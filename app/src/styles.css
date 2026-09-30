@@ -426,6 +426,13 @@ input, textarea { font-family: inherit; }
 }
 .auth-card h1 { font-size: 22px; text-align: center; }
 .auth-sub { color: var(--muted); text-align: center; margin-bottom: 20px; }
+.auth-server-row { display: flex; gap: 8px; margin: 10px 0 6px; }
+.auth-server-row input {
+  flex: 1; padding: 9px 12px; border-radius: 6px; border: none;
+  background: #1e1f22; color: var(--text); outline: none;
+}
+.auth-server-row .btn-primary { margin-top: 0; padding: 9px 12px; }
+.auth-server-hint { font-size: 11px; color: var(--muted); text-align: center; margin: 0 0 12px; }
 .auth-form { display: flex; flex-direction: column; gap: 4px; }
 .auth-form label { font-size: 11px; font-weight: 600; color: var(--muted); margin-top: 12px; width: 100%; }
 .auth-form input {

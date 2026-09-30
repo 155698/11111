@@ -8,12 +8,20 @@ export default function AuthScreen({ socket, onAuth }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [remember, setRemember] = useState(true);
+  const [serverAddr, setServerAddr] = useState(() => socket.getServerUrl() || '');
 
   useEffect(() => {
     const offErr = socket.on('auth:error', (d) => { setError(d.error); setLoading(false); });
     const offOk = socket.on('auth:ok', (d) => { onAuth(d.user); });
     return () => { offErr(); offOk(); };
   }, [socket, onAuth]);
+
+  function applyServer() {
+    const url = socket.saveServerUrl(serverAddr);
+    if (socket.ws) { try { socket.ws.close(); } catch {} }
+    socket.connect(url || undefined);
+    setError(socket.getServerUrl() ? '' : 'Подключено: локальный сервер (localhost)');
+  }
 
   function submit(e) {
     e.preventDefault();
@@ -40,6 +48,18 @@ export default function AuthScreen({ socket, onAuth }) {
       <div className="auth-card">
         <h1 style={{ fontWeight: 700, marginBottom: 4 }}>MultiVoice</h1>
         <p className="auth-sub">{mode === 'login' ? 'С возвращением!' : 'Создай аккаунт'}</p>
+
+        <div className="auth-server-row">
+          <input
+            value={serverAddr}
+            onChange={(e) => setServerAddr(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') applyServer(); }}
+            placeholder="Адрес сервера (например 26.87.218.127)"
+          />
+          <button className="btn-primary" onClick={applyServer}>Подключить</button>
+        </div>
+        <p className="auth-server-hint">{socket.getServerUrl() ? `Сервер: ${socket.getServerUrl()}` : 'Сервер: localhost (по умолчанию)'}</p>
+
         <form onSubmit={submit} className="auth-form">
           <label>Имя пользователя</label>
           <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="например: ann" required />
