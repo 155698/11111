@@ -1,0 +1,24 @@
+{
+  "name": "multitool-voice",
+  "version": "1.0.3b",
+  "private": true,
+  "description": "Свой мессенджер с голосовыми каналами (клон Discord) — монорепозиторий",
+  "workspaces": [
+    "server",
+    "app"
+  ],
+  "scripts": {
+    "server": "npm run start --workspace server",
+    "app": "npm run dev --workspace app",
+    "build:server": "npm run build --workspace server",
+    "start:app": "npm run start --workspace app",
+    "postinstall": "npm run build --workspace server"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "7zip-bin": "^5.2.0",
+    "app-builder-bin": "^4.0.0"
+  }
+}

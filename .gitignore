@@ -1,0 +1,22 @@
+# deps
+node_modules/
+
+# builds
+app/dist/
+app/release/
+app/server-dist/
+server/dist/
+server/public/
+
+# data & logs
+server/data/
+*.sqlite
+*.sqlite-journal
+*wal
+server/log/
+server/server.log
+app/renderer.log
+
+# misc
+.DS_Store
+*.log

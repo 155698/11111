@@ -1,0 +1,20 @@
+{
+  "name": "multitool-voice-server",
+  "version": "1.0.3b",
+  "private": true,
+  "description": "Сервер мессенджера: WebSocket API + SQLite + WebRTC-сигнализация голоса",
+  "main": "dist/index.cjs",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "start": "node dist/index.cjs",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "sql.js": "^1.11.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}
