@@ -1,6 +1,6 @@
 {
   "name": "multitool-voice",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Свой мессенджер с голосовыми каналами (клон Discord) — монорепозиторий",
   "workspaces": [

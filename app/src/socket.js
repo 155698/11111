@@ -260,10 +260,9 @@ export class SocketClient {
     if (this.localStream) this.localStream.getAudioTracks().forEach((t) => pc.addTrack(t, this.localStream));
     if (this.shareStream) this.shareStream.getVideoTracks().forEach((t) => pc.addTrack(t, this.shareStream));
 
+    // attach handlers; addTrack already fired negotiationneeded,
+    // which will create and send the offer automatically.
     this._wirePeer(pc, userId);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    this.send('rtc:offer', { to: userId, sdp: offer, channelId: this.voiceChannelId });
   }
 
   // attach handlers + automatic renegotiation to a peer connection
@@ -284,6 +283,7 @@ export class SocketClient {
     // automatic renegotiation when tracks are added/removed
     pc.onnegotiationneeded = async () => {
       try {
+        if (pc.signalingState !== 'stable') return; // an offer is already in flight
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         this.send('rtc:offer', { to: userId, sdp: offer, channelId: this.voiceChannelId });
