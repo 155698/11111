@@ -61,7 +61,7 @@ export default function App() {
   }, [socket]);
 
   // ---- update check (from GitHub Releases) ----
-  const APP_VERSION = '1.0.5';
+  const APP_VERSION = '1.0.6';
   const GH_REPO = '155698/11111';
   const GITHUB_API = 'https://api.github.com/repos/' + GH_REPO + '/releases/latest';
   useEffect(() => {
@@ -292,6 +292,11 @@ export default function App() {
       const audio = new Audio();
       audio.srcObject = stream;
       audio.autoplay = true;
+      // route to the selected output device (headphones) if supported
+      const outId = localStorage.getItem('mvt_out_id');
+      if (outId && audio.setSinkId) {
+        audio.setSinkId(outId).catch(() => {});
+      }
       audio.play().catch(() => {});
       // start voice-activity detection for this peer
       startVad(uid, stream);
@@ -619,7 +624,7 @@ export default function App() {
                   <span className="sett-nav-ico">🖥</span> Сервер
                 </button>
                 <button className={`sett-nav-item ${settTab === 'mic' ? 'active' : ''}`} onClick={() => setSettTab('mic')}>
-                  <span className="sett-nav-ico">🎤</span> Микрофон
+                  <span className="sett-nav-ico">🎧</span> Звук
                 </button>
               </div>
               <div className="sett-content">
@@ -642,7 +647,7 @@ export default function App() {
                     </div>
                   </>
                 )}
-                {settTab === 'mic' && <MicSettings socket={socket} />}
+                {settTab === 'mic' && <SoundSettings socket={socket} />}
               </div>
             </div>
           </div>
@@ -1092,20 +1097,33 @@ function UserBar({ user, onLogout, onOpenSettings }) {
   );
 }
 
-function MicSettings({ socket }) {
-  const [devices, setDevices] = useState([]);
-  const [selected, setSelected] = useState(() => localStorage.getItem('mvt_mic_id') || '');
+function SoundSettings({ socket }) {
+  const [inDevices, setInDevices] = useState([]);
+  const [outDevices, setOutDevices] = useState([]);
+  const [selectedIn, setSelectedIn] = useState(() => localStorage.getItem('mvt_mic_id') || '');
+  const [selectedOut, setSelectedOut] = useState(() => localStorage.getItem('mvt_out_id') || '');
   const [testing, setTesting] = useState(false);
+  const [testingOut, setTestingOut] = useState(false);
   const [level, setLevel] = useState(0);
+  const [outTestMsg, setOutTestMsg] = useState('');
   const levelRef = useRef(0);
   const streamRef = useRef(null);
   const rafRef = useRef(null);
+  const testAudioRef = useRef(null);
 
   useEffect(() => {
-    navigator.mediaDevices.enumerateDevices().then((ds) => {
-      setDevices(ds.filter((d) => d.kind === 'audioinput'));
+    const refresh = () => navigator.mediaDevices.enumerateDevices().then((ds) => {
+      setInDevices(ds.filter((d) => d.kind === 'audioinput'));
+      setOutDevices(ds.filter((d) => d.kind === 'audiooutput'));
     }).catch(() => {});
-    return () => { stopTest(); };
+    refresh();
+    // re-enumerate when devices change
+    navigator.mediaDevices.addEventListener?.('devicechange', refresh);
+    return () => {
+      navigator.mediaDevices.removeEventListener?.('devicechange', refresh);
+      stopTest();
+      stopOutTest();
+    };
   }, []);
 
   function stopTest() {
@@ -1119,7 +1137,7 @@ function MicSettings({ socket }) {
     stopTest();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: selected ? { deviceId: { exact: selected } } : true,
+        audio: selectedIn ? { deviceId: { exact: selectedIn } } : true,
       });
       streamRef.current = stream;
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1146,27 +1164,77 @@ function MicSettings({ socket }) {
     }
   }
 
+  function stopOutTest() {
+    setTestingOut(false);
+    if (testAudioRef.current) {
+      try { testAudioRef.current.pause(); testAudioRef.current.src = ''; } catch {}
+      testAudioRef.current = null;
+    }
+    setOutTestMsg('');
+  }
+
+  async function testOutput() {
+    stopOutTest();
+    try {
+      const audio = new Audio();
+      testAudioRef.current = audio;
+      // generate a short beep via WebAudio and play to the selected sink
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 440;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      // route to output device if supported
+      if (selectedOut && ctx.setSinkId) {
+        try { await ctx.setSinkId(selectedOut); } catch {}
+      }
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.8);
+      setTestingOut(true);
+      setOutTestMsg('Играет тестовый сигнал…');
+      setTimeout(() => { stopOutTest(); }, 1000);
+    } catch (e) {
+      // fallback: try HTMLAudioElement setSinkId
+      try {
+        const audio = new Audio();
+        testAudioRef.current = audio;
+        audio.src = 'data:audio/wav;base64,UklGRlwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+        if (selectedOut && audio.setSinkId) { try { await audio.setSinkId(selectedOut); } catch {} }
+        await audio.play().catch(() => {});
+        setTestingOut(true);
+        setOutTestMsg('Играет тестовый сигнал…');
+        setTimeout(() => stopOutTest(), 1200);
+      } catch (e2) {
+        alert('Не удалось воспроизвести тест: ' + (e2 && e2.message ? e2.message : e2));
+      }
+    }
+  }
+
   function apply() {
-    localStorage.setItem('mvt_mic_id', selected);
-    // If currently in a voice channel, re-acquire the mic with the new device
-    if (socket && socket.requestMicDevice) socket.requestMicDevice(selected);
+    localStorage.setItem('mvt_mic_id', selectedIn);
+    localStorage.setItem('mvt_out_id', selectedOut);
+    if (socket && socket.requestMicDevice) socket.requestMicDevice(selectedIn);
     setLevel(0);
   }
 
   return (
     <div className="mic-settings">
-      <p className="sett-hint">Выберите микрофон для голосовых каналов:</p>
+      <div className="sett-title">Микрофон</div>
+      <p className="sett-hint">Устройство ввода для голосовых каналов:</p>
       <select
         className="sp-input"
-        value={selected}
-        onChange={(e) => setSelected(e.target.value)}
+        value={selectedIn}
+        onChange={(e) => setSelectedIn(e.target.value)}
       >
         <option value="">По умолчанию (системный)</option>
-        {devices.map((d) => (
+        {inDevices.map((d) => (
           <option key={d.deviceId} value={d.deviceId}>{d.label || `Микрофон ${d.deviceId.slice(0, 6)}`}</option>
         ))}
       </select>
-      {devices.length === 0 && <p className="sp-empty-mini">Не удалось получить список устройств (разрешите доступ к микрофону)</p>}
+      {inDevices.length === 0 && <p className="sp-empty-mini">Не удалось получить список устройств (разрешите доступ к микрофону)</p>}
 
       <div className="mic-level">
         <span>Уровень:</span>
@@ -1179,9 +1247,31 @@ function MicSettings({ socket }) {
         ) : (
           <button className="btn-secondary" onClick={stopTest}>Остановить</button>
         )}
-        <button className="btn-secondary" onClick={apply}>Применить</button>
       </div>
-      <p className="sp-empty-mini">Тест включает запись — говорите в микрофон и смотрите на уровень.</p>
+
+      <div style={{ margin: '18px 0 0', borderTop: '1px solid var(--bg3)', paddingTop: '16px' }}>
+        <div className="sett-title">Наушники (вывод)</div>
+        <p className="sett-hint">Устройство вывода звука:</p>
+        <select
+          className="sp-input"
+          value={selectedOut}
+          onChange={(e) => setSelectedOut(e.target.value)}
+        >
+          <option value="">По умолчанию (системный)</option>
+          {outDevices.map((d) => (
+            <option key={d.deviceId} value={d.deviceId}>{d.label || `Наушники ${d.deviceId.slice(0, 6)}`}</option>
+          ))}
+        </select>
+        {outTestMsg && <p className="sp-empty-mini">{outTestMsg}</p>}
+        <div className="modal-actions">
+          {!testingOut ? (
+            <button className="btn-primary" onClick={testOutput}>Тест наушников</button>
+          ) : (
+            <button className="btn-secondary" onClick={stopOutTest}>Стоп</button>
+          )}
+          <button className="btn-secondary" onClick={apply}>Применить</button>
+        </div>
+      </div>
     </div>
   );
 }

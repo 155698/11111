@@ -207,15 +207,13 @@ export class SocketClient {
       this.shareStream = stream;
       // stop sharing if user closes the system dialog
       stream.getVideoTracks()[0]?.addEventListener('ended', () => this.stopShare());
-      // add the video sender to every connected peer (renegotiation)
-      const jobs = [];
+      // add the video sender to every connected peer; onnegotiationneeded
+      // will automatically renegotiate (send offer) for each
       for (const [uid, pc] of this.peers) {
         if (!pc.getSenders().find((s) => s.track && s.track.kind === 'video')) {
           pc.addTrack(stream.getVideoTracks()[0], stream);
         }
-        jobs.push(this._renegotiatePeer(pc, uid));
       }
-      await Promise.all(jobs);
       this.onShareChanged?.(true);
       return stream;
     } catch (e) {
@@ -228,34 +226,15 @@ export class SocketClient {
     if (!this.shareStream) return;
     const tracks = this.shareStream.getTracks();
     tracks.forEach((t) => { try { t.stop(); } catch {} });
-    // remove video senders from peers (renegotiation)
-    const jobs = [];
+    // remove video senders from peers; onnegotiationneeded renegotiates
     for (const [uid, pc] of this.peers) {
       const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
       if (sender) {
         try { pc.removeTrack(sender); } catch {}
-        jobs.push(this._renegotiateSender(pc, uid));
       }
     }
     this.shareStream = null;
-    await Promise.all(jobs);
     this.onShareChanged?.(false);
-  }
-
-  async _renegotiatePeer(pc, uid) {
-    try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      this.send('rtc:offer', { to: uid, sdp: offer, channelId: this.voiceChannelId });
-    } catch (e) { console.warn('[share] reneg offer failed', e); }
-  }
-
-  async _renegotiateSender(pc, uid) {
-    try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      this.send('rtc:offer', { to: uid, sdp: offer, channelId: this.voiceChannelId });
-    } catch (e) { console.warn('[share] reneg remove failed', e); }
   }
 
   leaveVoice() {
@@ -281,28 +260,48 @@ export class SocketClient {
     if (this.localStream) this.localStream.getAudioTracks().forEach((t) => pc.addTrack(t, this.localStream));
     if (this.shareStream) this.shareStream.getVideoTracks().forEach((t) => pc.addTrack(t, this.shareStream));
 
+    this._wirePeer(pc, userId);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    this.send('rtc:offer', { to: userId, sdp: offer, channelId: this.voiceChannelId });
+  }
+
+  // attach handlers + automatic renegotiation to a peer connection
+  _wirePeer(pc, userId) {
     pc.onicecandidate = (e) => {
       if (e.candidate) {
         this.send('rtc:ice', { to: userId, candidate: e.candidate, channelId: this.voiceChannelId });
       }
     };
     pc.ontrack = (e) => {
+      console.warn('[rtc] ontrack kind=', e.track && e.track.kind, 'user=', userId);
       if (e.track && e.track.kind === 'video') {
         this.onRemoteScreen?.(userId, e.streams[0]);
       } else {
         this.onRemoteTrack?.(userId, e.streams[0]);
       }
     };
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    this.send('rtc:offer', { to: userId, sdp: offer, channelId: this.voiceChannelId });
+    // automatic renegotiation when tracks are added/removed
+    pc.onnegotiationneeded = async () => {
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        this.send('rtc:offer', { to: userId, sdp: offer, channelId: this.voiceChannelId });
+      } catch (e) {
+        console.warn('[rtc] negotiationneeded failed', e);
+      }
+    };
   }
 
   // Peer initiated -> we answer.
   async handleOffer(from, sdp) {
     const pc = this.peers.get(from) || this._makePeer(from);
     await pc.setRemoteDescription(sdp);
-    if (this.localStream) this.localStream.getAudioTracks().forEach((t) => pc.addTrack(t, this.localStream));
+    // add tracks only if we don't already have a sender of that kind (fixes
+    // duplicate senders during renegotiation)
+    if (this.localStream && !pc.getSenders().find((s) => s.track && s.track.kind === 'audio')) {
+      this.localStream.getAudioTracks().forEach((t) => pc.addTrack(t, this.localStream));
+    }
     if (this.shareStream && !pc.getSenders().find((s) => s.track && s.track.kind === 'video')) {
       this.shareStream.getVideoTracks().forEach((t) => pc.addTrack(t, this.shareStream));
     }
@@ -334,16 +333,7 @@ export class SocketClient {
   _makePeer(userId) {
     const pc = new RTCPeerConnection({ iceServers: this._iceConfig() });
     this.peers.set(userId, pc);
-    pc.onicecandidate = (e) => {
-      if (e.candidate) this.send('rtc:ice', { to: userId, candidate: e.candidate, channelId: this.voiceChannelId });
-    };
-    pc.ontrack = (e) => {
-      if (e.track && e.track.kind === 'video') {
-        this.onRemoteScreen?.(userId, e.streams[0]);
-      } else {
-        this.onRemoteTrack?.(userId, e.streams[0]);
-      }
-    };
+    this._wirePeer(pc, userId);
     return pc;
   }
 
