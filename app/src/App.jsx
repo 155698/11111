@@ -67,7 +67,7 @@ export default function App() {
   }, [socket]);
 
   // ---- update check (from GitHub Releases) ----
-  const APP_VERSION = '1.1.3';
+  const APP_VERSION = '1.1.4';
   const GH_REPO = '155698/11111';
   const GITHUB_API = 'https://api.github.com/repos/' + GH_REPO + '/releases/latest';
   useEffect(() => {
@@ -95,19 +95,32 @@ export default function App() {
     return () => { disposed = true; clearInterval(id); };
   }, []);
 
-  // While streaming with system audio, mute the playout of other people's
-  // voices (this app's audio) so it doesn't loop back into the stream.
-  useEffect(() => {
-    if (!sharing) return undefined;
-    const originals = [];
-    for (const a of remoteAudios) {
-      originals.push(a.audio.volume);
+// While streaming with system audio, keep this app's voices out of the stream.
+// If a separate output device is configured for streaming, route voices there
+// (so the streamer still hears them); otherwise mute them.
+useEffect(() => {
+  if (!sharing) return undefined;
+  const shareOut = localStorage.getItem('mvt_share_voice_out') || '';
+  const originals = [];
+  for (const a of remoteAudios) {
+    originals.push(a.audio.volume);
+    if (shareOut && a.audio.setSinkId) {
+      a.audio.setSinkId(shareOut).catch(() => {});
+      a.audio.volume = 1;
+    } else {
       a.audio.volume = 0;
     }
-    return () => {
-      remoteAudios.forEach((a, i) => { a.audio.volume = originals[i]; });
-    };
-  }, [sharing, remoteAudios]);
+  }
+  return () => {
+    const restoreOut = localStorage.getItem('mvt_share_voice_out') || '';
+    remoteAudios.forEach((a, i) => {
+      a.audio.volume = originals[i];
+      if (restoreOut && a.audio.setSinkId) {
+        a.audio.setSinkId(restoreOut).catch(() => {});
+      }
+    });
+  };
+}, [sharing, remoteAudios]);
 
   // show voice bar when the cursor is over the central work area (voice tiles)
   useEffect(() => {
@@ -1354,6 +1367,7 @@ function SoundSettings({ socket }) {
   const [procSens, setProcSens] = useState(() => Number(localStorage.getItem('mvt_proc_sens') ?? 0.5));
   const [shareQuality, setShareQuality] = useState(() => localStorage.getItem('mvt_share_quality') || '1080p60');
   const [shareAudio, setShareAudio] = useState(() => localStorage.getItem('mvt_share_audio') !== '0');
+  const [shareVoiceOut, setShareVoiceOut] = useState(() => localStorage.getItem('mvt_share_voice_out') || '');
   const levelRef = useRef(0);
   const streamRef = useRef(null);
   const rafRef = useRef(null);
@@ -1471,6 +1485,7 @@ function SoundSettings({ socket }) {
     localStorage.setItem('mvt_proc_sens', String(procSens));
     localStorage.setItem('mvt_share_quality', shareQuality);
     localStorage.setItem('mvt_share_audio', shareAudio ? '1' : '0');
+    localStorage.setItem('mvt_share_voice_out', shareVoiceOut);
     if (socket && socket.applyMicProcessing) {
       socket.applyMicProcessing({ gain: procGain, noiseGate: procNoise, sensitivity: procSens });
     }
@@ -1567,6 +1582,14 @@ function SoundSettings({ socket }) {
           <input type="checkbox" checked={shareAudio} onChange={(e) => setShareAudio(e.target.checked)} />
           <span>Передавать звук с экрана</span>
         </label>
+        <p className="sett-hint" style={{ marginTop: 12 }}>Звук собеседников во время стрима (отдельное устройство, чтобы не попадал в трансляцию):</p>
+        <select className="sp-input" value={shareVoiceOut} onChange={(e) => setShareVoiceOut(e.target.value)}>
+          <option value="">— Приглушать во время стрима —</option>
+          {outDevices.filter((d) => d.deviceId !== selectedOut).map((d) => (
+            <option key={d.deviceId} value={d.deviceId}>{d.label || `Устройство ${d.deviceId.slice(0, 6)}`}</option>
+          ))}
+        </select>
+        <p className="sp-empty-mini">Выберите второе устройство (например, вторые наушники), чтобы слышать собеседников во время стрима без их попадания в трансляцию.</p>
       </div>
     </div>
   );
