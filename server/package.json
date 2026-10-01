@@ -1,6 +1,6 @@
 {
   "name": "multitool-voice-server",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Сервер мессенджера: WebSocket API + SQLite + WebRTC-сигнализация голоса",
   "main": "dist/index.cjs",

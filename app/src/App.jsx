@@ -67,7 +67,7 @@ export default function App() {
   }, [socket]);
 
   // ---- update check (from GitHub Releases) ----
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.1.1';
   const GH_REPO = '155698/11111';
   const GITHUB_API = 'https://api.github.com/repos/' + GH_REPO + '/releases/latest';
   useEffect(() => {

@@ -296,20 +296,36 @@ export class SocketClient {
       let stream;
       const shareAudio = localStorage.getItem('mvt_share_audio') !== '0';
       if (sourceId) {
-        // custom picker: video only. getUserMedia with desktop capture + audio
-        // crashes the renderer in Electron, so system audio is not captured here.
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId,
-              maxWidth: p.width,
-              maxHeight: p.height,
-              maxFrameRate: p.frameRate,
+        // custom picker: grab the chosen desktop source; also try to capture
+        // system audio (shareAudio) — falls back to video-only if audio fails.
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: shareAudio ? { mandatory: { chromeMediaSource: 'desktop' } } : false,
+            video: {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: sourceId,
+                maxWidth: p.width,
+                maxHeight: p.height,
+                maxFrameRate: p.frameRate,
+              },
             },
-          },
-        });
+          });
+        } catch (eAudio) {
+          // audio capture not supported — try video-only
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: sourceId,
+                maxWidth: p.width,
+                maxHeight: p.height,
+                maxFrameRate: p.frameRate,
+              },
+            },
+          });
+        }
       } else {
         stream = await navigator.mediaDevices.getDisplayMedia({ video: ideal, audio: shareAudio });
       }
