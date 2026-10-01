@@ -317,18 +317,40 @@ input, textarea { font-family: inherit; }
   display: flex; align-items: center; justify-content: center; font-size: 14px;
 }
 .vt-expand:hover { background: rgba(255, 255, 255, 0.25); }
+.vt-volume {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 8px; z-index: 3;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(0, 0, 0, 0.6); border-radius: 6px; padding: 3px 8px;
+  color: #fff; font-size: 11px;
+  opacity: 0; pointer-events: none;
+  transition: opacity .15s ease;
+}
+.voice-tile:hover .vt-volume { opacity: 1; pointer-events: auto; }
+.share-expanded:hover .vt-volume,
+.share-expanded .vt-volume { opacity: 1; pointer-events: auto; left: 16px; transform: none; bottom: 16px; }
+.vt-volume input[type="range"] { width: 90px; accent-color: var(--blurple); }
+/* fullscreen overlay variant: bottom-left, shows on hover */
+.share-expanded .vt-volume {
+  left: 16px; bottom: 16px; transform: none;
+}
+.share-expanded:hover .vt-volume { opacity: 1; pointer-events: auto; }
 
 /* ==== Expanded self-share overlay ==== */
 .share-expanded {
   position: fixed; inset: 0; z-index: 500;
   background: rgba(0, 0, 0, 0.95);
-  display: flex; align-items: center; justify-content: center;
-  cursor: zoom-out;
 }
-.share-expanded video {
-  position: static;
+.share-expanded .screen-container {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; cursor: default;
+}
+.share-expanded .screen-container .screen-view {
   width: auto; height: 92vh; max-width: 95vw;
   background: #000; border-radius: 8px;
+  object-fit: contain;
+  transform-origin: center center;
+  will-change: transform;
 }
 .share-expanded-btn {
   right: 16px; bottom: 16px;
@@ -366,18 +388,23 @@ input, textarea { font-family: inherit; }
 .vb-btn.sharing { background: var(--green); }
 
 /* ==== Remote screens ==== */
+.screen-container { position: absolute; inset: 0; }
+.screen-container .screen-view {
+  width: 100%; height: 100%; object-fit: contain; background: #000;
+}
+/* default (small remote view in corner, no longer used as fixed box) */
 .screen-view {
-  width: 340px; max-width: 90vw;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  border-radius: 10px;
-  border: 1px solid #3a3d42;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  width: 340px; max-width: 90vw; aspect-ratio: 16 / 9;
+  background: #000; border-radius: 10px;
+  border: 1px solid #3a3d42; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
   object-fit: contain;
 }
 /* inside a voice tile, fill the whole tile */
-.voice-tile .screen-view {
+.voice-tile .screen-container {
   position: absolute; inset: 0; width: 100%; height: 100%;
+}
+.voice-tile .screen-container .screen-view {
+  position: static; width: 100%; height: 100%; object-fit: contain;
   border-radius: 0; border: none; box-shadow: none;
 }
 .screen-view {

@@ -294,8 +294,10 @@ export class SocketClient {
       const ideal = { width: { ideal: p.width }, height: { ideal: p.height }, frameRate: { ideal: p.frameRate } };
 
       let stream;
+      const shareAudio = localStorage.getItem('mvt_share_audio') !== '0';
       if (sourceId) {
-        // custom picker: grab the chosen desktop source directly in Electron
+        // custom picker: video only. getUserMedia with desktop capture + audio
+        // crashes the renderer in Electron, so system audio is not captured here.
         stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
@@ -309,16 +311,23 @@ export class SocketClient {
           },
         });
       } else {
-        stream = await navigator.mediaDevices.getDisplayMedia({ video: ideal, audio: false });
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: ideal, audio: shareAudio });
       }
       this.shareStream = stream;
       // stop sharing if user closes the system dialog
       stream.getVideoTracks()[0]?.addEventListener('ended', () => this.stopShare());
-      // add the video sender to every connected peer; onnegotiationneeded
-      // will automatically renegotiate (send offer) for each
+      const shareVideoTrack = stream.getVideoTracks()[0];
+      const shareAudioTrack = stream.getAudioTracks()[0];
+      // add video sender (and system audio sender if available) to each peer.
+      // The mic is a separate sender (this.localStream), so system audio from
+      // the share is added as an additional audio sender without touching mic.
       for (const [uid, pc] of this.peers) {
-        if (!pc.getSenders().find((s) => s.track && s.track.kind === 'video')) {
-          pc.addTrack(stream.getVideoTracks()[0], stream);
+        if (shareVideoTrack && !pc.getSenders().find((s) => s.track && s.track.kind === 'video')) {
+          pc.addTrack(shareVideoTrack, stream);
+        }
+        // add system audio only if not already sending this exact track
+        if (shareAudioTrack && !pc.getSenders().some((s) => s.track === shareAudioTrack)) {
+          pc.addTrack(shareAudioTrack, stream);
         }
       }
       this.onShareChanged?.(true);
@@ -388,9 +397,21 @@ export class SocketClient {
     pc.ontrack = (e) => {
       console.warn('[rtc] ontrack kind=', e.track && e.track.kind, 'user=', userId);
       if (e.track && e.track.kind === 'video') {
+        this.remoteScreensActive = this.remoteScreensActive || {};
+        this.remoteScreensActive[userId] = true;
         this.onRemoteScreen?.(userId, e.streams[0]);
         // when the remote screen track ends (streamer stopped sharing), remove it
-        e.track.onended = () => this.onRemoteScreenEnded?.(userId);
+        e.track.onended = () => {
+          this.remoteScreensActive[userId] = false;
+          this.onRemoteScreenEnded?.(userId);
+        };
+      } else if (e.track && e.track.kind === 'audio' && this.remoteScreensActive && this.remoteScreensActive[userId]) {
+        // system audio coming along the screen share
+        const audio = new Audio();
+        audio.srcObject = e.streams[0];
+        audio.autoplay = true;
+        audio.play().catch(() => {});
+        this.onRemoteShareAudio?.(userId, audio);
       } else {
         this.onRemoteTrack?.(userId, e.streams[0]);
       }

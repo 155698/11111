@@ -13,6 +13,29 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
     callback(permission === 'media' || permission === 'microphone' || permission === 'display-capture');
   });
+
+  // Required in newer Electron for getDisplayMedia (esp. with system audio):
+  // handle the request and grant the chosen video source + system audio.
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    try {
+      const { desktopCapturer } = require('electron');
+      desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 200, height: 120 } })
+        .then((sources) => {
+          // default: prefer the first screen
+          const chooser = () => new Promise((resolve) => {
+            const screen = sources.find((s) => s.id.startsWith('screen'));
+            resolve(screen || sources[0]);
+          });
+          chooser().then((selected) => {
+            if (!selected) { callback({}); return; }
+            callback({ video: selected, audio: 'loopback' });
+          });
+        })
+        .catch(() => callback({}));
+    } catch (e) {
+      callback({});
+    }
+  });
 });
 
 // List desktop sources (screens + app windows) for the custom picker.

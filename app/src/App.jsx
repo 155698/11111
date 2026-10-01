@@ -9,6 +9,7 @@ export default function App() {
   const speakingRef = useRef(new Set());      // track current speakers to avoid re-renders
   const vadAnalysers = useRef(new Map());      // userId -> { analyser, lastVol }
   const lastFetchRef = useRef(null);           // last channel we requested messages for
+  const shareAudioRefs = useRef(new Map());      // uid -> { audio, volume }
   const [guilds, setGuilds] = useState([]);
   const [dms, setDms] = useState([]);
   const [friends, setFriends] = useState([]);
@@ -66,7 +67,7 @@ export default function App() {
   }, [socket]);
 
   // ---- update check (from GitHub Releases) ----
-  const APP_VERSION = '1.0.9';
+  const APP_VERSION = '1.1.0';
   const GH_REPO = '155698/11111';
   const GITHUB_API = 'https://api.github.com/repos/' + GH_REPO + '/releases/latest';
   useEffect(() => {
@@ -321,6 +322,16 @@ export default function App() {
     socket.onRemoteScreenEnded = (uid) => {
       setRemoteScreens((arr) => arr.filter((x) => x.uid !== uid));
       setExpandedRemoteUid(null);
+      if (shareAudioRefs.current.has(uid)) {
+        const a = shareAudioRefs.current.get(uid);
+        try { a.audio.pause(); a.audio.srcObject = null; } catch {}
+        shareAudioRefs.current.delete(uid);
+      }
+    };
+    socket.onRemoteShareAudio = (uid, audio) => {
+      const vol = Number(localStorage.getItem('mvt_sharevol_' + uid) ?? 1);
+      audio.volume = vol;
+      shareAudioRefs.current.set(uid, { audio, volume: vol });
     };
     socket.onShareChanged = (sh) => setSharing(sh);
     return () => { subs.forEach((off) => off && off()); };
@@ -574,6 +585,11 @@ export default function App() {
           labelsVisible={barVisible}
           expandedShare={expandedShare}
           onToggleExpand={(v) => setExpandedShare(v)}
+          onShareVolume={(uid, vol) => {
+            localStorage.setItem('mvt_sharevol_' + uid, String(vol));
+            const entry = shareAudioRefs.current.get(uid);
+            if (entry) { entry.audio.volume = vol; entry.volume = vol; }
+          }}
           onVoiceState={setVoiceChannel} />
       )}
       <VoiceBar
@@ -1102,7 +1118,7 @@ function DmPanel({ socket, dms, activeChannel, onSelect }) {
   );
 }
 
-function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voiceMembers, speakingUsers, shareStream, remoteScreens, labelsVisible, expandedShare, onToggleExpand }) {
+function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voiceMembers, speakingUsers, shareStream, remoteScreens, labelsVisible, expandedShare, onToggleExpand, onShareVolume }) {
   useEffect(() => {
     const el = document.getElementById('msg-scroll');
     if (el) el.scrollTop = el.scrollHeight;
@@ -1150,6 +1166,7 @@ function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voi
             <div className="voice-tile self-share">
               <SelfShareVideo stream={shareStream} />
               <div className="vt-name">🖥 Ваша трансляция</div>
+              <VolumeSlider uid="self" onVolume={onShareVolume} />
               <button className="vt-expand" title={expandedShare ? 'Свернуть' : 'Развернуть'}
                 onClick={() => onToggleExpand(!expandedShare)}>
                 {expandedShare ? '🗕' : '⛶'}
@@ -1165,6 +1182,7 @@ function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voi
                   <>
                     <ScreenView stream={remote.stream} />
                     <div className="vt-name">🖥 {u.user?.display_name || u.user?.username || `#${u.id}`}</div>
+                    <VolumeSlider uid={u.id} onVolume={onShareVolume} />
                     <button className="vt-expand" title={expanded ? 'Свернуть' : 'Развернуть'}
                       onClick={() => setExpandedRemoteUid(expanded ? null : u.id)}>
                       {expanded ? '🗕' : '⛶'}
@@ -1255,6 +1273,7 @@ function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voi
       {expandedShare && shareStream && (
         <div className="share-expanded" onClick={() => onToggleExpand(false)}>
           <SelfShareVideo stream={shareStream} />
+          <VolumeSlider uid="self" onVolume={onShareVolume} />
           <button className="vt-expand share-expanded-btn" title="Свернуть"
             onClick={() => onToggleExpand(false)}>
             🗕
@@ -1268,6 +1287,7 @@ function ChatPanel({ channel, messages, socket, currentUserId, voiceChannel, voi
         return (
           <div className="share-expanded" onClick={() => setExpandedRemoteUid(null)}>
             <ScreenView stream={rs.stream} />
+            <VolumeSlider uid={rs.uid} onVolume={onShareVolume} />
             <button className="vt-expand share-expanded-btn" title="Свернуть"
               onClick={() => setExpandedRemoteUid(null)}>
               🗕
@@ -1302,7 +1322,6 @@ function UserBar({ user, onLogout, onOpenSettings }) {
         <span className="ub-status">в сети</span>
       </div>
       <button className="ub-settings" onClick={onOpenSettings} title="Настройки">⚙</button>
-      <button className="ub-logout" onClick={onLogout} title="Выйти">⏻</button>
     </div>
   );
 }
@@ -1320,6 +1339,7 @@ function SoundSettings({ socket }) {
   const [procNoise, setProcNoise] = useState(() => Number(localStorage.getItem('mvt_proc_noise') ?? 0.5));
   const [procSens, setProcSens] = useState(() => Number(localStorage.getItem('mvt_proc_sens') ?? 0.5));
   const [shareQuality, setShareQuality] = useState(() => localStorage.getItem('mvt_share_quality') || '1080p60');
+  const [shareAudio, setShareAudio] = useState(() => localStorage.getItem('mvt_share_audio') !== '0');
   const levelRef = useRef(0);
   const streamRef = useRef(null);
   const rafRef = useRef(null);
@@ -1436,6 +1456,7 @@ function SoundSettings({ socket }) {
     localStorage.setItem('mvt_proc_noise', String(procNoise));
     localStorage.setItem('mvt_proc_sens', String(procSens));
     localStorage.setItem('mvt_share_quality', shareQuality);
+    localStorage.setItem('mvt_share_audio', shareAudio ? '1' : '0');
     if (socket && socket.applyMicProcessing) {
       socket.applyMicProcessing({ gain: procGain, noiseGate: procNoise, sensitivity: procSens });
     }
@@ -1528,6 +1549,10 @@ function SoundSettings({ socket }) {
           <option value="480p30">480p · 30 кадров/с</option>
           <option value="360p30">360p · 30 кадров/с</option>
         </select>
+        <label className="remember-row" style={{ marginTop: 10 }}>
+          <input type="checkbox" checked={shareAudio} onChange={(e) => setShareAudio(e.target.checked)} />
+          <span>Передавать звук с экрана</span>
+        </label>
       </div>
     </div>
   );
@@ -1535,13 +1560,49 @@ function SoundSettings({ socket }) {
 
 function ScreenView({ stream }) {
   const ref = useRef(null);
+  const [scale, setScale] = useState(1);
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const dragRef = useRef(null);
+
   useEffect(() => {
     if (ref.current) {
       ref.current.srcObject = stream;
       ref.current.play().catch(() => {});
     }
+    // reset zoom when stream changes
+    setScale(1); setOff({ x: 0, y: 0 });
   }, [stream]);
-  return <video ref={ref} className="screen-view" autoPlay playsInline muted />;
+
+  function onWheel(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const delta = e.deltaY < 0 ? 1.1 : 0.9;
+    setScale((s) => Math.min(5, Math.max(1, s * delta)));
+  }
+
+  function onPointerDown(e) {
+    e.stopPropagation();
+    (e.currentTarget).setPointerCapture(e.pointerId);
+    dragRef.current = { x: e.clientX - off.x, y: e.clientY - off.y };
+  }
+  function onPointerMove(e) {
+    if (!dragRef.current) return;
+    setOff({ x: e.clientX - dragRef.current.x, y: e.clientY - dragRef.current.y });
+  }
+  function onPointerUp(e) {
+    e.stopPropagation();
+    dragRef.current = null;
+  }
+
+  return (
+    <div className="screen-container" onWheel={onWheel}
+      onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}
+      onClick={(e) => e.stopPropagation()}
+      style={{ overflow: 'hidden' }}>
+      <video ref={ref} className="screen-view" autoPlay playsInline muted
+        style={{ transform: `scale(${scale}) translate(${off.x / scale}px, ${off.y / scale}px)`, cursor: scale > 1 ? 'grab' : 'default' }} />
+    </div>
+  );
 }
 
 function SelfShareVideo({ stream }) {
@@ -1553,4 +1614,19 @@ function SelfShareVideo({ stream }) {
     }
   }, [stream]);
   return <video ref={ref} className="vt-video" autoPlay playsInline muted />;
+}
+
+function VolumeSlider({ uid, onVolume }) {
+  const [vol, setVol] = useState(() => Number(localStorage.getItem('mvt_sharevol_' + uid) ?? 1));
+  useEffect(() => {
+    if (onVolume) onVolume(uid, vol);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <div className="vt-volume" onClick={(e) => e.stopPropagation()}>
+      <span>🔊</span>
+      <input type="range" min="0" max="1" step="0.05" value={vol}
+        onChange={(e) => { const v = Number(e.target.value); setVol(v); if (onVolume) onVolume(uid, v); }} />
+    </div>
+  );
 }
