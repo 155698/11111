@@ -67,7 +67,7 @@ export default function App() {
   }, [socket]);
 
   // ---- update check (from GitHub Releases) ----
-  const APP_VERSION = '1.1.1';
+  const APP_VERSION = '1.1.2';
   const GH_REPO = '155698/11111';
   const GITHUB_API = 'https://api.github.com/repos/' + GH_REPO + '/releases/latest';
   useEffect(() => {
@@ -94,6 +94,20 @@ export default function App() {
     const id = setInterval(check, 15 * 60 * 1000); // every 15 minutes
     return () => { disposed = true; clearInterval(id); };
   }, []);
+
+  // While streaming with system audio, mute the playout of other people's
+  // voices (this app's audio) so it doesn't loop back into the stream.
+  useEffect(() => {
+    if (!sharing) return undefined;
+    const originals = [];
+    for (const a of remoteAudios) {
+      originals.push(a.audio.volume);
+      a.audio.volume = 0;
+    }
+    return () => {
+      remoteAudios.forEach((a, i) => { a.audio.volume = originals[i]; });
+    };
+  }, [sharing, remoteAudios]);
 
   // show voice bar when the cursor is over the central work area (voice tiles)
   useEffect(() => {
